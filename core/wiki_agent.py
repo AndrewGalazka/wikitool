@@ -87,20 +87,53 @@ Return ONLY a valid JSON array. No explanation."""
 
     resp = client.chat.completions.create(
         model=model,
-        messages=[{"role": "user", "content": prompt}],
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are a JSON-only API. You MUST respond with a single valid JSON array "
+                    "of operation objects and nothing else. No markdown fences, no explanation, "
+                    "no prose. Start your response with '[' and end with ']'."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ],
         **build_completion_kwargs(max_tokens=3000, temperature=0.1),
         **build_response_format_kwargs(),
     )
 
     record_usage(audit_id, "ingestion", resp.usage, db_conn)
 
-    raw = resp.choices[0].message.content or "[]"
+    raw = (resp.choices[0].message.content or "").strip()
+
+    # Strip markdown code fences if the model wrapped the JSON anyway
+    import re
+    raw = re.sub(r"^```(?:json)?\s*", "", raw)
+    raw = re.sub(r"\s*```$", "", raw).strip()
+
+    operations = []
     try:
-        operations = json.loads(raw)
+        parsed = json.loads(raw)
+        # Ensure we have a list of dicts — the model sometimes returns a list of strings
+        if isinstance(parsed, list):
+            operations = [op for op in parsed if isinstance(op, dict)]
+            skipped = len(parsed) - len(operations)
+            if skipped:
+                logger.warning("Wiki synthesis: skipped %d non-dict items in LLM response", skipped)
+        elif isinstance(parsed, dict):
+            # Model returned a single object instead of an array
+            operations = [parsed]
     except json.JSONDecodeError:
-        import re
+        # Last-resort: try to extract a JSON array from anywhere in the response
         match = re.search(r"\[.*\]", raw, re.DOTALL)
-        operations = json.loads(match.group(0)) if match else []
+        if match:
+            try:
+                parsed = json.loads(match.group(0))
+                operations = [op for op in parsed if isinstance(op, dict)]
+            except json.JSONDecodeError:
+                logger.error("Wiki synthesis: could not parse LLM response as JSON. Raw: %s", raw[:500])
+        else:
+            logger.error("Wiki synthesis: no JSON array found in LLM response. Raw: %s", raw[:500])
 
     for op in operations:
         try:
