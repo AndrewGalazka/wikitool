@@ -339,7 +339,7 @@ async def delete_source(audit_id: str, source_id: str):
     """Delete a source file and its associated wiki pages."""
     db = get_db()
     src = db.execute(
-        "SELECT original_path, markdown_path FROM sources WHERE id=? AND audit_id=?",
+        "SELECT original_path, markdown_path, filename FROM sources WHERE id=? AND audit_id=?",
         (source_id, audit_id)
     ).fetchone()
     if not src:
@@ -353,13 +353,34 @@ async def delete_source(audit_id: str, source_id: str):
             if p.exists():
                 p.unlink(missing_ok=True)
 
-    # Remove wiki pages derived from this source
-    db.execute("DELETE FROM wiki_pages WHERE audit_id=? AND source_id=?", (audit_id, source_id))
+    # wiki_pages has no source_id column — provenance is stored in the metadata JSON
+    # under the "sources" key (list of filenames). Delete pages whose metadata
+    # references this filename AND whose page_type is "source" (the direct page),
+    # plus any lint_issues tied to those pages.
+    filename = src["filename"]
+    candidate_pages = db.execute(
+        "SELECT id, metadata FROM wiki_pages WHERE audit_id=?", (audit_id,)
+    ).fetchall()
+    pages_to_delete = []
+    for page in candidate_pages:
+        try:
+            meta = json.loads(page["metadata"] or "{}")
+            page_sources = meta.get("sources", [])
+            if filename in page_sources:
+                pages_to_delete.append(page["id"])
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    for pid in pages_to_delete:
+        db.execute("DELETE FROM lint_issues WHERE page_id=?", (pid,))
+        db.execute("DELETE FROM wiki_pages WHERE id=?", (pid,))
+
     # Remove the source record itself
     db.execute("DELETE FROM sources WHERE id=? AND audit_id=?", (source_id, audit_id))
     db.commit()
     db.close()
-    return {"deleted": source_id}
+    logger.info("Deleted source %s (%s) and %d wiki pages", source_id, filename, len(pages_to_delete))
+    return {"deleted": source_id, "wiki_pages_removed": len(pages_to_delete)}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
