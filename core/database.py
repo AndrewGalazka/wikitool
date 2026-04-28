@@ -129,6 +129,19 @@ def init_db() -> None:
         created_at      TEXT NOT NULL
     );
 
+    -- ── Wiki Index & Log (Karpathy LLM-Wiki pattern) ────────────────────────
+    CREATE TABLE IF NOT EXISTS wiki_index (
+        id          TEXT PRIMARY KEY,
+        audit_id    TEXT NOT NULL REFERENCES audits(id) ON DELETE CASCADE,
+        content     TEXT NOT NULL,   -- full index.md markdown
+        updated_at  TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS wiki_log (
+        id          TEXT PRIMARY KEY,
+        audit_id    TEXT NOT NULL REFERENCES audits(id) ON DELETE CASCADE,
+        entry       TEXT NOT NULL,   -- single log line
+        created_at  TEXT NOT NULL
+    );
     -- ── Findings ─────────────────────────────────────────────────────────────
     CREATE TABLE IF NOT EXISTS findings (
         id              TEXT PRIMARY KEY,

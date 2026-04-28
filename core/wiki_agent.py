@@ -7,9 +7,9 @@ Implements the Karpathy LLM-Wiki pattern (2026):
   - Each ingested source produces one or more structured wiki pages
   - Pages follow the atomic-wiki format: YAML frontmatter + titled sections +
     [[wiki-link]] cross-references + See Also + compiled-from footer
-  - A lint pass runs after every ingestion to flag contradictions, gaps, and
-    orphan references
-  - An index.md and log.md are maintained for navigation and audit trail
+  - index.md is rebuilt after every ingestion (LLM-driven page selection reads this first)
+  - log.md records every ingest and lint pass chronologically
+  - A two-layer lint pass runs after every ingestion
 """
 
 import json
@@ -103,7 +103,6 @@ def _today() -> str:
 def _parse_json_response(raw: str, context: str = "") -> list:
     """Robustly parse a JSON array from an LLM response."""
     raw = raw.strip()
-    # Strip markdown code fences
     raw = re.sub(r"^```(?:json)?\s*", "", raw)
     raw = re.sub(r"\s*```$", "", raw).strip()
 
@@ -120,7 +119,6 @@ def _parse_json_response(raw: str, context: str = "") -> list:
     except json.JSONDecodeError:
         pass
 
-    # Last-resort: extract first JSON array found anywhere in the response
     match = re.search(r"\[.*\]", raw, re.DOTALL)
     if match:
         try:
@@ -133,11 +131,170 @@ def _parse_json_response(raw: str, context: str = "") -> list:
     return []
 
 
+# ── Index & Log maintenance ───────────────────────────────────────────────────
+
+def rebuild_index(audit_id: str, db_conn) -> str:
+    """
+    Rebuild the index.md for this audit from all current wiki pages.
+    The index is the primary navigation tool used by the agentic query loop —
+    the LLM reads it first to decide which pages to load.
+
+    Format follows the Karpathy LLM-Wiki convention:
+      # Wiki Index — <audit_name>
+      ## <page_type category>
+      - [[slug]] — one-line summary | tags: [...] | sources: [...]
+
+    Returns the full index markdown string.
+    """
+    pages = db_conn.execute(
+        "SELECT id, page_type, title, content, metadata FROM wiki_pages WHERE audit_id=? ORDER BY page_type, title",
+        (audit_id,)
+    ).fetchall()
+
+    audit = db_conn.execute("SELECT name FROM audits WHERE id=?", (audit_id,)).fetchone()
+    audit_name = audit["name"] if audit else audit_id
+
+    if not pages:
+        index_md = f"# Wiki Index — {audit_name}\n\n*No pages yet. Upload evidence files to begin.*\n"
+    else:
+        # Group by page_type
+        by_type: dict[str, list] = {}
+        for p in pages:
+            pt = p["page_type"]
+            by_type.setdefault(pt, []).append(p)
+
+        type_order = ["evidence_area", "control", "process", "system", "person", "source", "finding"]
+        sections = []
+        for pt in type_order:
+            if pt not in by_type:
+                continue
+            section_lines = [f"## {pt.replace('_', ' ').title()} Pages"]
+            for p in by_type[pt]:
+                try:
+                    meta = json.loads(p["metadata"] or "{}")
+                except Exception:
+                    meta = {}
+                slug = meta.get("id", "").split("/")[-1] or p["id"][:8]
+                tags = meta.get("tags", [])
+                sources = meta.get("sources", [])
+                # Extract one-line summary: first non-empty, non-frontmatter line after # Title
+                summary = _extract_summary(p["content"])
+                tag_str = ", ".join(tags[:4]) if tags else ""
+                src_str = ", ".join(sources[:2]) if sources else ""
+                line = f"- [[{slug}]] — {summary}"
+                if tag_str:
+                    line += f" | tags: {tag_str}"
+                if src_str:
+                    line += f" | sources: {src_str}"
+                section_lines.append(line)
+            sections.append("\n".join(section_lines))
+
+        # Any remaining types not in type_order
+        for pt, plist in by_type.items():
+            if pt in type_order:
+                continue
+            section_lines = [f"## {pt.replace('_', ' ').title()} Pages"]
+            for p in plist:
+                try:
+                    meta = json.loads(p["metadata"] or "{}")
+                except Exception:
+                    meta = {}
+                slug = meta.get("id", "").split("/")[-1] or p["id"][:8]
+                summary = _extract_summary(p["content"])
+                section_lines.append(f"- [[{slug}]] — {summary}")
+            sections.append("\n".join(section_lines))
+
+        index_md = (
+            f"# Wiki Index — {audit_name}\n\n"
+            f"*Last updated: {_today()} | Total pages: {len(pages)}*\n\n"
+            + "\n\n".join(sections)
+            + "\n"
+        )
+
+    # Upsert into wiki_index table
+    existing = db_conn.execute(
+        "SELECT id FROM wiki_index WHERE audit_id=?", (audit_id,)
+    ).fetchone()
+    if existing:
+        db_conn.execute(
+            "UPDATE wiki_index SET content=?, updated_at=? WHERE audit_id=?",
+            (index_md, _now(), audit_id)
+        )
+    else:
+        db_conn.execute(
+            "INSERT INTO wiki_index (id, audit_id, content, updated_at) VALUES (?, ?, ?, ?)",
+            (str(uuid.uuid4()), audit_id, index_md, _now())
+        )
+    db_conn.commit()
+    return index_md
+
+
+def _extract_summary(content: str) -> str:
+    """Extract a one-line summary from a wiki page's content."""
+    if not content:
+        return "No summary available."
+    lines = content.splitlines()
+    in_frontmatter = False
+    past_frontmatter = False
+    past_title = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped == "---" and not past_frontmatter:
+            in_frontmatter = not in_frontmatter
+            if not in_frontmatter:
+                past_frontmatter = True
+            continue
+        if in_frontmatter:
+            continue
+        if stripped.startswith("# "):
+            past_title = True
+            continue
+        if past_title and stripped and not stripped.startswith("#") and not stripped.startswith("---"):
+            # Return first 120 chars of first real paragraph
+            return stripped[:120] + ("..." if len(stripped) > 120 else "")
+    return "No summary available."
+
+
+def append_log(audit_id: str, entry: str, db_conn) -> None:
+    """
+    Append a chronological entry to the wiki log (log.md equivalent).
+    Format: ## [YYYY-MM-DD] <entry>
+    """
+    log_entry = f"## [{_today()}] {entry}"
+    db_conn.execute(
+        "INSERT INTO wiki_log (id, audit_id, entry, created_at) VALUES (?, ?, ?, ?)",
+        (str(uuid.uuid4()), audit_id, log_entry, _now())
+    )
+    db_conn.commit()
+
+
+def get_index(audit_id: str, db_conn) -> str:
+    """Return the current index.md content for this audit."""
+    row = db_conn.execute(
+        "SELECT content FROM wiki_index WHERE audit_id=?", (audit_id,)
+    ).fetchone()
+    return row["content"] if row else ""
+
+
+def get_log(audit_id: str, db_conn, limit: int = 50) -> str:
+    """Return the last N log entries as a markdown string."""
+    rows = db_conn.execute(
+        "SELECT entry FROM wiki_log WHERE audit_id=? ORDER BY created_at DESC LIMIT ?",
+        (audit_id, limit)
+    ).fetchall()
+    if not rows:
+        return "*No log entries yet.*"
+    return "\n\n".join(r["entry"] for r in reversed(rows))
+
+
+# ── Main synthesis pipeline ───────────────────────────────────────────────────
+
 def synthesize_evidence(source_id: str, audit_id: str, db_conn) -> None:
     """
     Read a converted source and synthesize/update evidence wiki pages.
     Follows the Karpathy LLM-Wiki pattern — each page has YAML frontmatter,
     structured sections, [[wiki-link]] cross-references, and a compiled-from footer.
+    Rebuilds index.md and appends to log.md after completion.
     Called after successful ingestion.
     """
     source = db_conn.execute(
@@ -149,10 +306,9 @@ def synthesize_evidence(source_id: str, audit_id: str, db_conn) -> None:
         return
 
     md_content = Path(source["markdown_path"]).read_text(encoding="utf-8")
-    # Truncate very large files to avoid token overflow
     md_excerpt = md_content[:14000]
 
-    # Build a compact index of existing wiki pages for cross-reference awareness
+    # Build compact index of existing wiki pages for cross-reference awareness
     existing_pages = db_conn.execute(
         "SELECT id, page_type, title, metadata FROM wiki_pages WHERE audit_id=?",
         (audit_id,)
@@ -241,7 +397,6 @@ Return ONLY a valid JSON array. No explanation, no prose, no markdown fences."""
             content = op.get("content", "")
             metadata = op.get("metadata", {})
 
-            # Ensure metadata always has sources list containing this filename
             if "sources" not in metadata:
                 metadata["sources"] = []
             if source["filename"] not in metadata["sources"]:
@@ -253,20 +408,17 @@ Return ONLY a valid JSON array. No explanation, no prose, no markdown fences."""
                     """INSERT INTO wiki_pages (id, audit_id, page_type, title, content, metadata, created_at, updated_at)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
-                        page_id,
-                        audit_id,
+                        page_id, audit_id,
                         op.get("page_type", "source"),
                         op.get("title", "Untitled"),
                         content,
                         json.dumps(metadata),
-                        _now(),
-                        _now(),
+                        _now(), _now(),
                     ),
                 )
                 created_count += 1
 
             elif action == "update" and op.get("page_id"):
-                # Merge sources list with existing metadata
                 existing = db_conn.execute(
                     "SELECT metadata FROM wiki_pages WHERE id=? AND audit_id=?",
                     (op["page_id"], audit_id)
@@ -297,16 +449,27 @@ Return ONLY a valid JSON array. No explanation, no prose, no markdown fences."""
         source_id, created_count, updated_count,
     )
 
-    # Run lint pass after every ingestion (as required by spec)
+    # Rebuild index.md after every ingestion
+    rebuild_index(audit_id, db_conn)
+
+    # Append to log.md
+    append_log(
+        audit_id,
+        f"ingest | {source['filename']} | created={created_count}, updated={updated_count}",
+        db_conn,
+    )
+
+    # Run lint pass after every ingestion
     run_lint_pass(audit_id, db_conn)
 
+
+# ── Lint pass ─────────────────────────────────────────────────────────────────
 
 def run_lint_pass(audit_id: str, db_conn) -> None:
     """
     Two-layer lint pass following the Karpathy/llm-atomic-wiki pattern:
-    1. Structural checks (missing frontmatter, broken [[links]], orphan pages)
-    2. LLM semantic checks (contradictions, concept gaps, expired claims)
-    Inserts lint_issues records for any problems found.
+    Layer 1 — structural: missing frontmatter, missing # Title, ghost [[links]]
+    Layer 2 — LLM semantic: contradictions, concept gaps, expired claims
     """
     pages = db_conn.execute(
         "SELECT id, page_type, title, content, metadata FROM wiki_pages WHERE audit_id=?",
@@ -318,37 +481,33 @@ def run_lint_pass(audit_id: str, db_conn) -> None:
 
     # ── Layer 1: Structural lint ──────────────────────────────────────────────
     structural_issues = []
-    all_slugs = set()
+    all_slugs: set[str] = set()
 
     for p in pages:
         try:
             meta = json.loads(p["metadata"] or "{}")
             slug = meta.get("id", "")
             if slug:
-                # Extract just the slug part after type/
                 all_slugs.add(slug.split("/")[-1])
         except Exception:
             pass
 
     for p in pages:
         content = p["content"] or ""
-        # Check for YAML frontmatter
         if not content.strip().startswith("---"):
             structural_issues.append({
                 "issue_type": "gap",
-                "description": f'Page "{p["title"]}" is missing YAML frontmatter. It should start with ---.',
+                "description": f'Page "{p["title"]}" is missing YAML frontmatter.',
                 "page_ids": [p["id"]],
             })
-        # Check for # Title as first content line after frontmatter
         lines = content.strip().splitlines()
         has_title = any(line.startswith("# ") for line in lines[:10])
         if not has_title:
             structural_issues.append({
                 "issue_type": "gap",
-                "description": f'Page "{p["title"]}" is missing a # Title heading after frontmatter.',
+                "description": f'Page "{p["title"]}" is missing a # Title heading.',
                 "page_ids": [p["id"]],
             })
-        # Check for ghost [[wiki-links]]
         linked_slugs = re.findall(r"\[\[([^\]|]+)(?:\|[^\]]*)?\]\]", content)
         for linked_slug in linked_slugs:
             if linked_slug not in all_slugs:
@@ -372,15 +531,14 @@ def run_lint_pass(audit_id: str, db_conn) -> None:
 WIKI PAGES (summaries):
 {pages_summary}
 
-Check for the following issues and return a JSON array:
-
+Check for:
 1. CONTRADICTIONS — two pages state conflicting facts about the same entity or control
-2. GAPS — a concept, control, or entity is referenced across multiple pages but has no dedicated page
+2. GAPS — a concept, control, or entity is referenced across pages but has no dedicated page
 3. UNRESOLVED_REFERENCE — a finding or risk claim lacks supporting evidence pages
 
 For each issue return:
 - "issue_type": "contradiction" | "gap" | "unresolved_reference"
-- "description": clear, specific description of the issue (quote the conflicting text if applicable)
+- "description": clear, specific description (quote conflicting text if applicable)
 - "page_ids": list of affected page IDs using the [ID:...] values above
 
 Return ONLY a valid JSON array. If no issues found, return [].
@@ -389,10 +547,7 @@ Return ONLY a valid JSON array. If no issues found, return [].
     resp = client.chat.completions.create(
         model=model,
         messages=[
-            {
-                "role": "system",
-                "content": "You are a JSON-only API. Return a valid JSON array only. No prose, no fences.",
-            },
+            {"role": "system", "content": "You are a JSON-only API. Return a valid JSON array only. No prose, no fences."},
             {"role": "user", "content": lint_prompt},
         ],
         **build_completion_kwargs(max_tokens=2000, temperature=0.1),
@@ -406,7 +561,6 @@ Return ONLY a valid JSON array. If no issues found, return [].
 
     all_issues = structural_issues + llm_issues
 
-    # Clear old unresolved issues before inserting fresh ones
     db_conn.execute("DELETE FROM lint_issues WHERE audit_id=? AND resolved=0", (audit_id,))
 
     for issue in all_issues:
@@ -419,9 +573,7 @@ Return ONLY a valid JSON array. If no issues found, return [].
             """INSERT INTO lint_issues (id, audit_id, page_id, issue_type, description, source_pages, created_at)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (
-                issue_id,
-                audit_id,
-                primary_page,
+                issue_id, audit_id, primary_page,
                 issue.get("issue_type", "gap"),
                 issue.get("description", ""),
                 json.dumps(page_ids),
@@ -430,6 +582,14 @@ Return ONLY a valid JSON array. If no issues found, return [].
         )
 
     db_conn.commit()
+
+    # Append lint summary to log
+    append_log(
+        audit_id,
+        f"lint | structural={len(structural_issues)}, llm={len(llm_issues)}, total={len(all_issues)}",
+        db_conn,
+    )
+
     logger.info(
         "Lint pass complete: audit_id=%s, structural=%d, llm=%d, total=%d",
         audit_id, len(structural_issues), len(llm_issues), len(all_issues),

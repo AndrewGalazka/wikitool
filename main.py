@@ -445,6 +445,41 @@ async def update_wiki_page(audit_id: str, page_id: str, request: Request):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# WIKI INDEX & LOG  (Karpathy LLM-Wiki pattern)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/audits/{audit_id}/wiki-index")
+async def get_wiki_index(audit_id: str):
+    """Return the current index.md content for this audit."""
+    db = get_db()
+    row = db.execute("SELECT content, updated_at FROM wiki_index WHERE audit_id=?", (audit_id,)).fetchone()
+    db.close()
+    if not row:
+        return {"content": "", "updated_at": None}
+    return {"content": row["content"], "updated_at": row["updated_at"]}
+
+
+@app.post("/audits/{audit_id}/wiki-index/rebuild")
+async def rebuild_wiki_index_endpoint(audit_id: str):
+    """Manually trigger an index.md rebuild."""
+    from core.wiki_agent import rebuild_index
+    db = get_db()
+    content = rebuild_index(audit_id, db)
+    db.close()
+    return {"content": content}
+
+
+@app.get("/audits/{audit_id}/wiki-log")
+async def get_wiki_log(audit_id: str, limit: int = 50):
+    """Return the last N wiki log entries as markdown."""
+    from core.wiki_agent import get_log
+    db = get_db()
+    log_md = get_log(audit_id, db, limit=limit)
+    db.close()
+    return {"log": log_md}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # LINT ISSUES
 # ══════════════════════════════════════════════════════════════════════════════
 

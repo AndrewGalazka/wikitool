@@ -109,6 +109,11 @@
       <div class="pane-header">
         <h2>Evidence Wiki</h2>
         <div class="pane-controls">
+          <div class="wiki-subtabs">
+            <button class="wiki-subtab active" id="wikiSubtabPages" onclick="switchWikiSubtab('pages')">Pages</button>
+            <button class="wiki-subtab" id="wikiSubtabIndex" onclick="switchWikiSubtab('index')">Index</button>
+            <button class="wiki-subtab" id="wikiSubtabLog" onclick="switchWikiSubtab('log')">Log</button>
+          </div>
           <input type="text" id="wikiSearch" placeholder="Search wiki..." class="search-input" oninput="searchWiki(this.value)">
           <select id="wikiTypeFilter" onchange="filterWikiByType(this.value)" class="select-input">
             <option value="">All Types</option>
@@ -122,12 +127,34 @@
           </select>
         </div>
       </div>
-      <div class="wiki-layout">
-        <div class="wiki-sidebar" id="wikiSidebar">
-          <div class="wiki-loading text-muted">Loading wiki pages...</div>
+
+      <!-- Pages sub-pane -->
+      <div id="wikiSubPanePages" class="wiki-subpane">
+        <div class="wiki-layout">
+          <div class="wiki-sidebar" id="wikiSidebar">
+            <div class="wiki-loading text-muted">Loading wiki pages...</div>
+          </div>
+          <div class="wiki-viewer" id="wikiViewer">
+            <div class="wiki-empty text-muted">Select a page to view its content.</div>
+          </div>
         </div>
-        <div class="wiki-viewer" id="wikiViewer">
-          <div class="wiki-empty text-muted">Select a page to view its content.</div>
+      </div>
+
+      <!-- Index sub-pane -->
+      <div id="wikiSubPaneIndex" class="wiki-subpane" style="display:none">
+        <div class="wiki-index-toolbar">
+          <span class="text-muted text-sm" id="wikiIndexUpdated"></span>
+          <button class="btn btn-outline btn-sm" onclick="rebuildWikiIndex()">&#8635; Rebuild Index</button>
+        </div>
+        <div class="wiki-index-content markdown-body" id="wikiIndexContent">
+          <div class="text-muted">Loading index...</div>
+        </div>
+      </div>
+
+      <!-- Log sub-pane -->
+      <div id="wikiSubPaneLog" class="wiki-subpane" style="display:none">
+        <div class="wiki-index-content markdown-body" id="wikiLogContent">
+          <div class="text-muted">Loading log...</div>
         </div>
       </div>
     </div>

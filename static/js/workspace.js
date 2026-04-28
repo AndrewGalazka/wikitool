@@ -259,6 +259,70 @@ function filterWikiByType(type) {
   loadWiki(type);
 }
 
+/* ── Wiki Sub-tabs (Karpathy LLM-Wiki: Pages / Index / Log) ────────────── */
+let _currentWikiSubtab = 'pages';
+function switchWikiSubtab(name) {
+  _currentWikiSubtab = name;
+  document.querySelectorAll('.wiki-subtab').forEach(btn => btn.classList.remove('active'));
+  const activeBtn = document.getElementById('wikiSubtab' + name.charAt(0).toUpperCase() + name.slice(1));
+  if (activeBtn) activeBtn.classList.add('active');
+  document.getElementById('wikiSubPanePages').style.display = name === 'pages' ? '' : 'none';
+  document.getElementById('wikiSubPaneIndex').style.display = name === 'index' ? '' : 'none';
+  document.getElementById('wikiSubPaneLog').style.display   = name === 'log'   ? '' : 'none';
+  const searchEl = document.getElementById('wikiSearch');
+  const filterEl = document.getElementById('wikiTypeFilter');
+  if (searchEl) searchEl.style.display = name === 'pages' ? '' : 'none';
+  if (filterEl) filterEl.style.display = name === 'pages' ? '' : 'none';
+  if (name === 'index') loadWikiIndex();
+  if (name === 'log')   loadWikiLog();
+}
+
+async function loadWikiIndex() {
+  const el = document.getElementById('wikiIndexContent');
+  const updEl = document.getElementById('wikiIndexUpdated');
+  el.innerHTML = '<div class="text-muted">Loading index...</div>';
+  try {
+    const resp = await fetch(`/audits/${AUDIT_ID}/wiki-index`);
+    const data = await resp.json();
+    if (!data.content) {
+      el.innerHTML = '<div class="text-muted">No index yet. Upload evidence files to build the wiki.</div>';
+      return;
+    }
+    el.innerHTML = renderMarkdown(data.content);
+    if (updEl && data.updated_at) updEl.textContent = 'Last rebuilt: ' + data.updated_at.slice(0, 10);
+  } catch(e) {
+    el.innerHTML = '<div class="text-muted">Failed to load index.</div>';
+  }
+}
+
+async function rebuildWikiIndex() {
+  const el = document.getElementById('wikiIndexContent');
+  const updEl = document.getElementById('wikiIndexUpdated');
+  el.innerHTML = '<div class="text-muted">Rebuilding index...</div>';
+  try {
+    const resp = await fetch(`/audits/${AUDIT_ID}/wiki-index/rebuild`, { method: 'POST' });
+    const data = await resp.json();
+    el.innerHTML = renderMarkdown(data.content || '');
+    if (updEl) updEl.textContent = 'Rebuilt: ' + new Date().toISOString().slice(0, 10);
+    toast('Index rebuilt.', 'success');
+  } catch(e) {
+    el.innerHTML = '<div class="text-muted">Rebuild failed.</div>';
+    toast('Index rebuild failed.', 'error');
+  }
+}
+
+async function loadWikiLog() {
+  const el = document.getElementById('wikiLogContent');
+  el.innerHTML = '<div class="text-muted">Loading log...</div>';
+  try {
+    const resp = await fetch(`/audits/${AUDIT_ID}/wiki-log?limit=100`);
+    const data = await resp.json();
+    el.innerHTML = data.log ? renderMarkdown(data.log) : '<div class="text-muted">No log entries yet.</div>';
+  } catch(e) {
+    el.innerHTML = '<div class="text-muted">Failed to load log.</div>';
+  }
+}
+
 /* ── Guidance ────────────────────────────────────────────────────────────── */
 async function loadGuidance() {
   const resp = await fetch(`/audits/${AUDIT_ID}/sources`);
