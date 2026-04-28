@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Protiviti Operational Audit Assistant</title>
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<header class="app-header">
+  <div class="header-inner">
+    <div class="header-brand">
+      <span class="brand-logo">&#9670;</span>
+      <div>
+        <div class="brand-name">Protiviti</div>
+        <div class="brand-sub">Operational Audit Assistant</div>
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="openNewAuditModal()">+ New Audit</button>
+  </div>
+</header>
+
+<main class="dashboard-main">
+  <div class="dashboard-header">
+    <h1>Audit Dashboard</h1>
+    <p class="text-muted">Select an audit to open its workspace, or create a new one.</p>
+  </div>
+
+  {% if audits %}
+  <div class="audit-table-wrap">
+    <table class="audit-table">
+      <thead>
+        <tr>
+          <th>Audit Name</th>
+          <th>Client</th>
+          <th>Status</th>
+          <th>Work Program</th>
+          <th>Last Activity</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for a in audits %}
+        <tr class="audit-row {% if a.status == 'closed' %}row-closed{% endif %}">
+          <td>
+            <a href="/audits/{{ a.id }}" class="audit-link">{{ a.name }}</a>
+          </td>
+          <td>{{ a.client or '—' }}</td>
+          <td>
+            <span class="badge badge-{{ a.status }}">{{ a.status | capitalize }}</span>
+          </td>
+          <td>
+            <div class="progress-wrap">
+              <div class="progress-bar">
+                <div class="progress-fill" style="width: {{ a.completion_pct }}%"></div>
+              </div>
+              <span class="progress-label">{{ a.done_rows }}/{{ a.total_rows }} ({{ a.completion_pct }}%)</span>
+            </div>
+          </td>
+          <td class="text-muted text-sm">{{ a.updated_at[:10] }}</td>
+          <td class="action-cell">
+            {% if a.status == 'active' %}
+            <button class="btn btn-sm btn-outline" onclick="closeAudit('{{ a.id }}', '{{ a.name }}')">Close</button>
+            {% else %}
+            <button class="btn btn-sm btn-outline" onclick="reopenAudit('{{ a.id }}')">Reopen</button>
+            {% endif %}
+            <button class="btn btn-sm btn-danger" onclick="openDeleteModal('{{ a.id }}', '{{ a.name }}')">Delete</button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-icon">&#128196;</div>
+    <h2>No audits yet</h2>
+    <p>Create your first audit to get started.</p>
+    <button class="btn btn-primary" onclick="openNewAuditModal()">+ New Audit</button>
+  </div>
+  {% endif %}
+</main>
+
+<!-- New Audit Modal -->
+<div id="newAuditModal" class="modal-overlay" style="display:none">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>New Audit</h2>
+      <button class="modal-close" onclick="closeModal('newAuditModal')">&times;</button>
+    </div>
+    <form id="newAuditForm">
+      <div class="form-group">
+        <label>Audit Name <span class="required">*</span></label>
+        <input type="text" id="auditName" placeholder="e.g. Q2 2025 Procurement Audit" required>
+      </div>
+      <div class="form-group">
+        <label>Client <span class="text-muted">(optional)</span></label>
+        <input type="text" id="auditClient" placeholder="e.g. Acme Corporation">
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline" onclick="closeModal('newAuditModal')">Cancel</button>
+        <button type="submit" class="btn btn-primary">Create Audit</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Delete Audit Modal -->
+<div id="deleteModal" class="modal-overlay" style="display:none">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>Delete Audit</h2>
+      <button class="modal-close" onclick="closeModal('deleteModal')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p class="warning-text">&#9888; This action is permanent and cannot be undone. All audit data, wiki pages, and work program results will be deleted.</p>
+      <p>Type the audit name to confirm: <strong id="deleteAuditName"></strong></p>
+      <input type="text" id="deleteConfirmInput" placeholder="Type audit name here">
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('deleteModal')">Cancel</button>
+      <button class="btn btn-danger" onclick="confirmDelete()">Delete Permanently</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/js/dashboard.js"></script>
+</body>
+</html>

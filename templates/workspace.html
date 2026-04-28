@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ audit.name }} — Protiviti Audit Assistant</title>
+<link rel="stylesheet" href="/static/css/style.css">
+<link rel="stylesheet" href="/static/css/workspace.css">
+</head>
+<body>
+<header class="app-header">
+  <div class="header-inner">
+    <div class="header-brand">
+      <a href="/" class="back-link">&#8592;</a>
+      <span class="brand-logo">&#9670;</span>
+      <div>
+        <div class="brand-name">Protiviti</div>
+        <div class="brand-sub">Operational Audit Assistant</div>
+      </div>
+    </div>
+    <div class="audit-meta">
+      <span class="audit-title">{{ audit.name }}</span>
+      {% if audit.client %}<span class="audit-client text-muted">{{ audit.client }}</span>{% endif %}
+      <span class="badge badge-{{ audit.status }}">{{ audit.status | capitalize }}</span>
+    </div>
+    <div class="header-actions">
+      <span class="token-counter" id="tokenCounter" title="Total LLM tokens used this audit">
+        &#128200; <span id="tokenTotal">{{ token_totals.grand_total | default(0) }}</span> tokens
+      </span>
+      {% if audit.status == 'active' %}
+      <button class="btn btn-sm btn-outline" onclick="closeAudit()">Close Audit</button>
+      {% else %}
+      <button class="btn btn-sm btn-outline" onclick="reopenAudit()">Reopen Audit</button>
+      {% endif %}
+    </div>
+  </div>
+</header>
+
+<div class="workspace-layout">
+  <!-- Tab Navigation -->
+  <nav class="tab-nav">
+    <button class="tab-btn active" data-tab="sources" onclick="switchTab('sources')">
+      &#128196; Sources
+    </button>
+    <button class="tab-btn" data-tab="wiki" onclick="switchTab('wiki')">
+      &#128218; Wiki
+    </button>
+    <button class="tab-btn" data-tab="guidance" onclick="switchTab('guidance')">
+      &#128214; Guidance
+    </button>
+    <button class="tab-btn" data-tab="workprogram" onclick="switchTab('workprogram')">
+      &#9989; Work Program
+    </button>
+    <button class="tab-btn" data-tab="graph" onclick="switchTab('graph')">
+      &#128202; Graph
+    </button>
+    <button class="tab-btn" data-tab="chat" onclick="switchTab('chat')">
+      &#128172; Chat
+    </button>
+    <button class="tab-btn" data-tab="findings" onclick="switchTab('findings')">
+      &#128270; Findings
+    </button>
+  </nav>
+
+  <!-- Tab Content -->
+  <div class="tab-content">
+
+    <!-- ── SOURCES TAB ──────────────────────────────────────────────── -->
+    <div id="tab-sources" class="tab-pane active">
+      <div class="pane-header">
+        <h2>Sources</h2>
+        <p class="text-muted">Upload evidence files and guidance documents. Files are automatically converted and ingested into the wiki.</p>
+      </div>
+
+      <div class="upload-zone" id="uploadZone">
+        <div class="upload-inner">
+          <div class="upload-icon">&#128228;</div>
+          <p>Drag and drop files here, or <label class="upload-browse" for="fileInput">browse</label></p>
+          <p class="text-muted text-sm">Supported: PDF, Word, PowerPoint, Excel, CSV, Images, HTML, Markdown</p>
+          <input type="file" id="fileInput" multiple accept=".pdf,.docx,.doc,.pptx,.ppt,.xlsx,.xls,.csv,.png,.jpg,.jpeg,.tiff,.tif,.bmp,.gif,.html,.htm,.txt,.md" style="display:none">
+          <div class="upload-type-selector">
+            <label><input type="radio" name="uploadType" value="evidence" checked> Evidence</label>
+            <label><input type="radio" name="uploadType" value="guidance"> Guidance</label>
+          </div>
+        </div>
+      </div>
+
+      <div class="sources-list" id="sourcesList">
+        {% for s in sources %}
+        <div class="source-item" id="source-{{ s.id }}" data-status="{{ s.status }}">
+          <div class="source-icon">{{ '&#128196;' if s.file_type == 'evidence' else '&#128214;' }}</div>
+          <div class="source-info">
+            <div class="source-name">{{ s.filename }}</div>
+            <div class="source-meta text-muted text-sm">{{ s.file_type | capitalize }} &bull; {{ s.created_at[:10] }}</div>
+          </div>
+          <div class="source-status">
+            <span class="status-badge status-{{ s.status }}">{{ s.status | capitalize }}</span>
+            {% if s.error_message %}
+            <span class="error-tip" title="{{ s.error_message }}">&#9888;</span>
+            {% endif %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- ── WIKI TAB ─────────────────────────────────────────────────── -->
+    <div id="tab-wiki" class="tab-pane">
+      <div class="pane-header">
+        <h2>Evidence Wiki</h2>
+        <div class="pane-controls">
+          <input type="text" id="wikiSearch" placeholder="Search wiki..." class="search-input" oninput="searchWiki(this.value)">
+          <select id="wikiTypeFilter" onchange="filterWikiByType(this.value)" class="select-input">
+            <option value="">All Types</option>
+            <option value="source">Source</option>
+            <option value="person">Person</option>
+            <option value="process">Process</option>
+            <option value="control">Control</option>
+            <option value="system">System</option>
+            <option value="evidence_area">Evidence Area</option>
+            <option value="finding">Finding</option>
+          </select>
+        </div>
+      </div>
+      <div class="wiki-layout">
+        <div class="wiki-sidebar" id="wikiSidebar">
+          <div class="wiki-loading text-muted">Loading wiki pages...</div>
+        </div>
+        <div class="wiki-viewer" id="wikiViewer">
+          <div class="wiki-empty text-muted">Select a page to view its content.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── GUIDANCE TAB ─────────────────────────────────────────────── -->
+    <div id="tab-guidance" class="tab-pane">
+      <div class="pane-header">
+        <h2>Guidance Documents</h2>
+        <p class="text-muted">Authoritative guidance documents — stored as faithful copies, not synthesized into the wiki.</p>
+      </div>
+      <div class="guidance-layout">
+        <div class="guidance-list" id="guidanceList">
+          <div class="text-muted">Loading guidance documents...</div>
+        </div>
+        <div class="guidance-viewer" id="guidanceViewer">
+          <div class="guidance-empty text-muted">Select a document to view it.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── WORK PROGRAM TAB ─────────────────────────────────────────── -->
+    <div id="tab-workprogram" class="tab-pane">
+      <div class="pane-header">
+        <h2>Work Program</h2>
+        <div class="pane-controls">
+          <button class="btn btn-outline btn-sm" onclick="openWPUpload()">&#128228; Upload Program</button>
+          <button class="btn btn-primary btn-sm" onclick="runAllRows()">&#9654; Run All Pending</button>
+          <button class="btn btn-outline btn-sm" onclick="exportWorkProgram()">&#8595; Export</button>
+        </div>
+      </div>
+      <div id="wpUploadSection" style="display:none">
+        <div class="upload-zone upload-zone-sm">
+          <input type="file" id="wpFileInput" accept=".xlsx,.xls,.csv">
+          <label for="wpFileInput" class="btn btn-outline">Choose File (.xlsx or .csv)</label>
+          <span id="wpFileName" class="text-muted text-sm"></span>
+        </div>
+      </div>
+      <div id="wpColumnMapper" style="display:none" class="column-mapper">
+        <h3>Map Columns</h3>
+        <p class="text-muted">Confirm which columns correspond to the required fields.</p>
+        <div class="mapper-grid" id="mapperGrid"></div>
+        <button class="btn btn-primary" onclick="confirmColumnMapping()">Load Work Program</button>
+      </div>
+      <div id="wpTable" class="wp-table-wrap">
+        <table class="wp-table" id="workProgramTable">
+          <thead>
+            <tr>
+              <th style="width:80px">Test ID</th>
+              <th>Description</th>
+              <th style="width:120px">Status</th>
+              <th style="width:80px">Verified</th>
+              <th style="width:120px">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="wpTableBody">
+            <tr><td colspan="5" class="text-muted text-center">No work program loaded.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ── GRAPH TAB ────────────────────────────────────────────────── -->
+    <div id="tab-graph" class="tab-pane">
+      <div class="pane-header">
+        <h2>Knowledge Graph</h2>
+        <div class="pane-controls">
+          <button class="btn btn-primary btn-sm" onclick="refreshGraph()">&#8635; Refresh Graph</button>
+          <button class="btn btn-outline btn-sm" onclick="exportIssues()">&#8595; Export Issues</button>
+          <select id="graphTypeFilter" onchange="filterGraph(this.value)" class="select-input">
+            <option value="">All Types</option>
+            <option value="source">Source</option>
+            <option value="person">Person</option>
+            <option value="process">Process</option>
+            <option value="control">Control</option>
+            <option value="system">System</option>
+            <option value="evidence_area">Evidence Area</option>
+            <option value="finding">Finding</option>
+          </select>
+          <label class="checkbox-label">
+            <input type="checkbox" id="showIssuesOnly" onchange="filterGraph()"> Issues only
+          </label>
+        </div>
+      </div>
+      <div class="graph-layout">
+        <div class="graph-canvas-wrap">
+          <div id="graphCanvas"></div>
+          <div class="graph-legend">
+            <div class="legend-item"><span class="legend-dot" style="background:#4A90D9"></span> Source</div>
+            <div class="legend-item"><span class="legend-dot" style="background:#7ED321"></span> Person</div>
+            <div class="legend-item"><span class="legend-dot" style="background:#F5A623"></span> Process</div>
+            <div class="legend-item"><span class="legend-dot" style="background:#9B59B6"></span> Control</div>
+            <div class="legend-item"><span class="legend-dot" style="background:#1ABC9C"></span> System</div>
+            <div class="legend-item"><span class="legend-dot" style="background:#E74C3C"></span> Evidence Area</div>
+            <div class="legend-item"><span class="legend-dot" style="background:#E91E63"></span> Finding</div>
+            <div class="legend-item"><span class="legend-dot legend-issue"></span> Has Issues</div>
+          </div>
+        </div>
+        <div class="graph-sidebar" id="graphSidebar">
+          <div class="text-muted">Click a node to view its wiki page.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── CHAT TAB ─────────────────────────────────────────────────── -->
+    <div id="tab-chat" class="tab-pane">
+      <div class="pane-header">
+        <h2>Chat</h2>
+        <div class="pane-controls">
+          <div class="scope-selector">
+            <label class="scope-label">Scope:</label>
+            <label class="scope-opt">
+              <input type="radio" name="chatScope" value="evidence" checked onchange="setChatScope('evidence')">
+              Evidence Wiki
+            </label>
+            <label class="scope-opt">
+              <input type="radio" name="chatScope" value="guidance" onchange="setChatScope('guidance')">
+              Guidance Docs
+            </label>
+          </div>
+        </div>
+      </div>
+      <div class="chat-layout">
+        <div class="chat-messages" id="chatMessages">
+          <div class="chat-welcome">
+            <p>Ask questions about your audit evidence or guidance documents. Select a scope above before chatting.</p>
+          </div>
+        </div>
+        <div class="chat-input-area">
+          <textarea id="chatInput" placeholder="Ask a question..." rows="3" onkeydown="handleChatKey(event)"></textarea>
+          <button class="btn btn-primary" onclick="sendChatMessage()">Send</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── FINDINGS TAB ─────────────────────────────────────────────── -->
+    <div id="tab-findings" class="tab-pane">
+      <div class="pane-header">
+        <h2>Findings</h2>
+        <div class="pane-controls">
+          <button class="btn btn-primary btn-sm" onclick="generateFindings()">&#9889; Generate Findings</button>
+          <button class="btn btn-outline btn-sm" onclick="exportFindings()">&#8595; Export to Word</button>
+        </div>
+      </div>
+      <div id="findingsList" class="findings-list">
+        <div class="text-muted">No findings yet. Generate findings from completed work program rows.</div>
+      </div>
+    </div>
+
+  </div><!-- /tab-content -->
+</div><!-- /workspace-layout -->
+
+<!-- Row Detail Modal -->
+<div id="rowModal" class="modal-overlay" style="display:none">
+  <div class="modal modal-wide">
+    <div class="modal-header">
+      <h2 id="rowModalTitle">Test Row</h2>
+      <button class="modal-close" onclick="closeModal('rowModal')">&times;</button>
+    </div>
+    <div class="modal-body" id="rowModalBody"></div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('rowModal')">Close</button>
+      <button class="btn btn-primary" onclick="saveRowEdits()">Save Changes</button>
+    </div>
+  </div>
+</div>
+
+<!-- Duplicate File Modal -->
+<div id="duplicateModal" class="modal-overlay" style="display:none">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>Duplicate File Detected</h2>
+      <button class="modal-close" onclick="closeModal('duplicateModal')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p>A file with the same name or content already exists: <strong id="dupFilename"></strong></p>
+      <p>How would you like to proceed?</p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="resolveDuplicate('skip')">Skip</button>
+      <button class="btn btn-outline" onclick="resolveDuplicate('version')">Keep as New Version</button>
+      <button class="btn btn-danger" onclick="resolveDuplicate('replace')">Replace Existing</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  const AUDIT_ID = "{{ audit.id }}";
+  const AUDIT_STATUS = "{{ audit.status }}";
+</script>
+<script src="/static/js/workspace.js"></script>
+<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+<script src="/static/js/graph.js"></script>
+</body>
+</html>
