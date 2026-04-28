@@ -272,8 +272,9 @@ async function loadGuidance() {
   }
 
   list.innerHTML = guidance.map(g => `
-    <div class="guidance-item" onclick="openGuidanceDoc('${g.id}', '${escHtml(g.filename)}')" data-id="${g.id}">
-      <div class="guidance-item-name">📖 ${escHtml(g.filename)}</div>
+    <div class="guidance-item" data-id="${g.id}">
+      <div class="guidance-item-name" onclick="openGuidanceDoc('${g.id}', '${escHtml(g.filename)}')">📖 ${escHtml(g.filename)}</div>
+      <button class="guidance-delete-btn" title="Delete document" onclick="deleteGuidanceDoc('${g.id}', '${escHtml(g.filename)}')">&#128465;</button>
     </div>`).join('');
 }
 
@@ -293,6 +294,22 @@ async function openGuidanceDoc(sourceId, filename) {
   document.getElementById('guidanceViewer').innerHTML = `
     <h2 style="margin-bottom:16px">${escHtml(filename)}</h2>
     <div>${renderMarkdown(data.content)}</div>`;
+}
+
+async function deleteGuidanceDoc(sourceId, filename) {
+  if (!confirm(`Delete "${filename}"?\n\nThis will remove the document and any wiki pages derived from it. This cannot be undone.`)) return;
+
+  const resp = await fetch(`/audits/${AUDIT_ID}/sources/${sourceId}`, { method: 'DELETE' });
+  if (!resp.ok) { toast('Delete failed.', 'error'); return; }
+
+  // Clear viewer if this doc was open
+  const viewer = document.getElementById('guidanceViewer');
+  if (viewer && document.querySelector(`.guidance-item.active[data-id="${sourceId}"]`)) {
+    viewer.innerHTML = '<div class="guidance-empty text-muted">Select a document to view it.</div>';
+  }
+
+  toast(`"${filename}" deleted.`, 'success');
+  loadGuidance();
 }
 
 /* ── Work Program — Auto-detect, no confirmation screen ─────────────────── */

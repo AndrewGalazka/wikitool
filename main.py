@@ -331,6 +331,38 @@ async def get_source_content(audit_id: str, source_id: str):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# DELETE SOURCE
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.delete("/audits/{audit_id}/sources/{source_id}")
+async def delete_source(audit_id: str, source_id: str):
+    """Delete a source file and its associated wiki pages."""
+    db = get_db()
+    src = db.execute(
+        "SELECT original_path, markdown_path FROM sources WHERE id=? AND audit_id=?",
+        (source_id, audit_id)
+    ).fetchone()
+    if not src:
+        db.close()
+        raise HTTPException(404, "Source not found")
+
+    # Remove files from disk
+    for path_col in (src["original_path"], src["markdown_path"]):
+        if path_col:
+            p = Path(path_col)
+            if p.exists():
+                p.unlink(missing_ok=True)
+
+    # Remove wiki pages derived from this source
+    db.execute("DELETE FROM wiki_pages WHERE audit_id=? AND source_id=?", (audit_id, source_id))
+    # Remove the source record itself
+    db.execute("DELETE FROM sources WHERE id=? AND audit_id=?", (source_id, audit_id))
+    db.commit()
+    db.close()
+    return {"deleted": source_id}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # EVIDENCE WIKI
 # ══════════════════════════════════════════════════════════════════════════════
 

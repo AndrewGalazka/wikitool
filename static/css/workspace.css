@@ -279,9 +279,30 @@
   border-left: 3px solid transparent;
   transition: all 0.15s;
 }
+.guidance-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
 .guidance-item:hover { background: var(--surface); }
 .guidance-item.active { border-left-color: var(--accent); background: var(--surface); }
-.guidance-item-name { font-size: 13px; font-weight: 500; }
+.guidance-item-name { font-size: 13px; font-weight: 500; flex: 1; cursor: pointer; }
+
+.guidance-delete-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--text-muted);
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+  flex-shrink: 0;
+}
+.guidance-item:hover .guidance-delete-btn { opacity: 1; }
+.guidance-delete-btn:hover { color: var(--danger); }
 
 .guidance-viewer {
   flex: 1;
